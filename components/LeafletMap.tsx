@@ -18,23 +18,23 @@ L.Icon.Default.mergeOptions({
 })
 
 interface LeafletMapProps {
-  onPolygonDrawn?: (polygon: L.LatLngExpression[]) => void
-  onPopupsPlaced?: (popups: Array<{ position: L.LatLngExpression, content: string }>) => void
+  onPolygonsDrawn?: (polygons: L.LatLngExpression[][]) => Promise<void>
+  onPopupsPlaced?: (popups: Array<{ position: L.LatLngExpression, content: string }>) => Promise<void>
   taskId: number
   totalTasks: number
   readOnly?: boolean
-  initialPolygon?: L.LatLngExpression[]
+  initialPolygons?: L.LatLngExpression[][]
   initialPopups?: Array<{ position: L.LatLngExpression, content: string }>
   taskType: 'polygon' | 'popup'
 }
 
-function MapUpdater({ readOnly, initialPolygon, initialPopups }: { readOnly?: boolean, initialPolygon?: L.LatLngExpression[], initialPopups?: Array<{ position: L.LatLngExpression, content: string }> }) {
+function MapUpdater({ readOnly, initialPolygons, initialPopups }: { readOnly?: boolean, initialPolygons?: L.LatLngExpression[][], initialPopups?: Array<{ position: L.LatLngExpression, content: string }> }) {
   const map = useMap()
 
   useEffect(() => {
     if (readOnly) {
-      if (initialPolygon && initialPolygon.length > 0) {
-        const bounds = L.latLngBounds(initialPolygon as L.LatLngExpression[])
+      if (initialPolygons && initialPolygons.length > 0) {
+        const bounds = L.latLngBounds(initialPolygons[0] as L.LatLngExpression[])
         map.fitBounds(bounds)
       } else if (initialPopups && initialPopups.length > 0) {
         const bounds = L.latLngBounds(initialPopups.map(popup => popup.position) as L.LatLngExpression[])
@@ -45,7 +45,7 @@ function MapUpdater({ readOnly, initialPolygon, initialPopups }: { readOnly?: bo
     } else {
       map.setView([55.8214, 37.3388], 12) // Krasnogorsk coordinates
     }
-  }, [map, readOnly, initialPolygon, initialPopups])
+  }, [map, readOnly, initialPolygons, initialPopups])
 
   return null
 }
@@ -65,7 +65,7 @@ function PopupPlacer({ onPopupPlaced, isPlacingPopup }: { onPopupPlaced: (popup:
   return null
 }
 
-export default function LeafletMap({ onPolygonDrawn, onPopupsPlaced, taskId, totalTasks, readOnly = false, initialPolygon, initialPopups, taskType }: LeafletMapProps): JSX.Element {
+export default function LeafletMap({ onPolygonsDrawn, onPopupsPlaced, taskId, totalTasks, readOnly = false, initialPolygons, initialPopups, taskType }: LeafletMapProps): JSX.Element {
   const [drawnItems, setDrawnItems] = useState<L.FeatureGroup | null>(null)
   const [popups, setPopups] = useState<Array<{ position: L.LatLngExpression, content: string }>>(initialPopups || [])
   const [isPlacingPopup, setIsPlacingPopup] = useState(false)
@@ -76,30 +76,31 @@ export default function LeafletMap({ onPolygonDrawn, onPopupsPlaced, taskId, tot
     setDrawnItems(new L.FeatureGroup())
   }, [])
 
-  const handleCreated = (e: L.LeafletEvent): void => {
+  const handleCreated = async (e: L.LeafletEvent): Promise<void> => {
     if (e.type === 'draw:created' && 'layer' in e) {
       const layer = e.layer as L.Layer
       if (drawnItems) {
-        drawnItems.clearLayers()
         drawnItems.addLayer(layer)
-        // @ts-expect-error
-        const polygon = (layer as L.Polygon).getLatLngs()[0].map((latLng: L.LatLng) => [latLng.lat, latLng.lng])
-        onPolygonDrawn?.(polygon)
+        const polygons = drawnItems.getLayers()
+          .filter(layer => layer instanceof L.Polygon)
+          .map((layer) => (layer as L.Polygon).getLatLngs()[0].map((latLng: L.LatLng) => [latLng.lat, latLng.lng]))
+        await onPolygonsDrawn?.(polygons)
       }
     }
   }
 
-  const handlePopupPlaced = (popup: { position: L.LatLngExpression, content: string }) => {
-    setPopups(prevPopups => [...prevPopups, popup])
-    onPopupsPlaced?.([...popups, popup])
+  const handlePopupPlaced = async (popup: { position: L.LatLngExpression, content: string }) => {
+    const newPopups = [...popups, popup];
+    setPopups(newPopups)
+    await onPopupsPlaced?.(newPopups)
     setIsPlacingPopup(false)
   }
 
-  const handleSubmit = (): void => {
+  const handleSubmit = async (): Promise<void> => {
     if (taskType === 'polygon' && (!drawnItems || drawnItems.getLayers().length === 0)) {
       toast({
         title: "Ошибка",
-        description: "Пожалуйста, нарисуйте область на карте перед отправкой.",
+        description: "Пожалуйста, нарисуйте хотя бы одну область на карте перед отправкой.",
         variant: "destructive",
       })
       return
@@ -116,23 +117,37 @@ export default function LeafletMap({ onPolygonDrawn, onPopupsPlaced, taskId, tot
 
     let result
     if (taskType === 'polygon') {
-      // @ts-expect-error
-      result = drawnItems!.getLayers()[0].getLatLngs()[0].map((latLng: L.LatLng) => [latLng.lat, latLng.lng])
+      result = drawnItems!.getLayers()
+        .filter(layer => layer instanceof L.Polygon)
+        .map((layer) => (layer as L.Polygon).getLatLngs()[0].map((latLng: L.LatLng) => [latLng.lat, latLng.lng]))
     } else {
       result = popups
     }
 
-    saveTaskResult(taskId, result, taskType);
+    try {
+      if (taskType === 'polygon') {
+        await onPolygonsDrawn?.(result)
+      } else {
+        await onPopupsPlaced?.(result)
+      }
 
-    toast({
-      title: "Успех",
-      description: taskType === 'polygon' ? "Ваш рисунок был сохранен." : "Ваши попапы были сохранены.",
-    })
+      toast({
+        title: "Успех",
+        description: taskType === 'polygon' ? "Ваш рисунок был сохранен." : "Ваши попапы были сохранены.",
+      })
 
-    if (taskId < totalTasks) {
-      router.push(`/task/${taskId + 1}`)
-    } else {
-      router.push('/final')
+      if (taskId < totalTasks) {
+        router.push(`/task/${taskId + 1}`)
+      } else {
+        router.push('/final')
+      }
+    } catch (error) {
+      console.error('Error saving result:', error)
+      toast({
+        title: "Ошибка",
+        description: "Произошла ошибка при сохранении результата. Пожалуйста, попробуйте еще раз.",
+        variant: "destructive",
+      })
     }
   }
 
@@ -168,9 +183,9 @@ export default function LeafletMap({ onPolygonDrawn, onPopupsPlaced, taskId, tot
                   }}
                 />
               )}
-              {readOnly && initialPolygon && (
-                <Polygon positions={initialPolygon} />
-              )}
+              {readOnly && initialPolygons && initialPolygons.map((polygon, index) => (
+                <Polygon key={index} positions={polygon} />
+              ))}
             </FeatureGroup>
             <PopupPlacer onPopupPlaced={handlePopupPlaced} isPlacingPopup={isPlacingPopup} />
             {popups.map((popup, index) => (
@@ -180,7 +195,7 @@ export default function LeafletMap({ onPolygonDrawn, onPopupsPlaced, taskId, tot
                 </Popup>
               </Marker>
             ))}
-            <MapUpdater readOnly={readOnly} initialPolygon={initialPolygon} initialPopups={initialPopups} />
+            <MapUpdater readOnly={readOnly} initialPolygons={initialPolygons} initialPopups={initialPopups} />
           </MapContainer>
         )}
       </div>

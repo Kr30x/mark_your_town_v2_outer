@@ -31,7 +31,7 @@ export function TaskMapDisplay({ result }: TaskMapDisplayProps) {
         totalTasks={1}
         readOnly={true}
         taskType={result.type}
-        initialPolygon={result.type === 'polygon' ? result.polygon : undefined}
+        initialPolygons={result.type === 'polygon' ? result.polygons : undefined}
         initialPopups={result.type === 'popup' ? result.popups : undefined}
       />
     </div>

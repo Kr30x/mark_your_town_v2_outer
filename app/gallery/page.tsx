@@ -1,7 +1,6 @@
 "use client"
 
-import React from 'react'
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { 
   Card, 
   CardContent, 
@@ -25,6 +24,7 @@ import {
 import { Trash2, Search, MapPin, Square } from 'lucide-react'
 import { tasks } from '@/lib/tasks'
 import { TaskMapDisplay } from '@/components/TaskMapDisplay'
+import { getAllSessions, deleteSession } from '@/lib/storage'
 
 interface TaskResult {
   taskId: number
@@ -160,62 +160,22 @@ export default function GalleryPage() {
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    let storage: { getAllSessions: () => Session[], deleteSession: (id: string) => void }
-    let isSubscribed = true
-
-    const initializeStorage = async () => {
+    const fetchSessions = async () => {
       try {
-        storage = await import('@/lib/storage')
-        if (isSubscribed) {
-          loadSessions()
-        }
-      } catch (error) {
-        console.error('Error initializing storage:', error)
-        setIsLoading(false)
-      }
-    }
-
-    const loadSessions = () => {
-      try {
-        const loadedSessions = storage.getAllSessions()
-        if (isSubscribed) {
-          setSessions(loadedSessions)
-        }
+        const loadedSessions = await getAllSessions()
+        setSessions(loadedSessions)
       } catch (error) {
         console.error('Error loading sessions:', error)
       }
-      if (isSubscribed) {
-        setIsLoading(false)
-      }
+      setIsLoading(false)
     }
 
-    initializeStorage()
-
-    // Only add event listener if window is defined (client-side)
-    if (typeof window !== 'undefined') {
-      const handleStorageChange = () => {
-        if (storage) {
-          loadSessions()
-        }
-      }
-
-      window.addEventListener('storage', handleStorageChange)
-      
-      return () => {
-        isSubscribed = false
-        window.removeEventListener('storage', handleStorageChange)
-      }
-    }
-
-    return () => {
-      isSubscribed = false
-    }
+    fetchSessions()
   }, [])
 
   const handleDeleteSession = async (sessionId: string) => {
-    const { deleteSession } = await import('@/lib/storage')
     try {
-      deleteSession(sessionId)
+      await deleteSession(sessionId)
       setSessions(prev => prev.filter(s => s.id !== sessionId))
     } catch (error) {
       console.error('Error deleting session:', error)

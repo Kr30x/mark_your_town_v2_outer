@@ -1,10 +1,11 @@
+import { db } from '../firebase/config';
+import { collection, addDoc, getDocs, query, where, updateDoc, deleteDoc } from 'firebase/firestore';
 import L from 'leaflet'
-import { getOrCreateSessionId } from './sessionUtils'
 
 export interface TaskResult {
   taskId: number
-  polygon?: L.LatLngExpression[]
-  popups?: Array<{ position: L.LatLngExpression, content: string }>
+  polygons?: string // For polygon type
+  popups?: string // Changed to string for popup type
   type: 'polygon' | 'popup'
 }
 
@@ -14,65 +15,123 @@ interface Session {
   results: TaskResult[]
 }
 
-export function saveTaskResult(
-  taskId: number, 
-  data: L.LatLngExpression[] | Array<{ position: L.LatLngExpression, content: string }>,
+// Helper function to convert polygons to string
+function polygonsToString(polygons: L.LatLngExpression[][]): string {
+  return JSON.stringify(polygons);
+}
+
+// Helper function to convert string back to polygons
+function stringToPolygons(str: string): L.LatLngExpression[][] {
+  return JSON.parse(str);
+}
+
+// Helper function to convert popups to string
+function popupsToString(popups: Array<{ position: L.LatLngExpression, content: string }>): string {
+  return JSON.stringify(popups.map(popup => ({
+    position: [popup.position.lat, popup.position.lng],
+    content: popup.content
+  })));
+}
+
+// Helper function to convert string back to popups
+function stringToPopups(str: string): Array<{ position: L.LatLngExpression, content: string }> {
+  return JSON.parse(str).map((popup: any) => ({
+    position: L.latLng(popup.position[0], popup.position[1]),
+    content: popup.content
+  }));
+}
+
+export async function saveTaskResult(
+  sessionId: string,
+  taskId: number,
+  data: L.LatLngExpression[][] | Array<{ position: L.LatLngExpression, content: string }>,
   type: 'polygon' | 'popup'
 ) {
-  const sessions = getAllSessions()
-  const currentSessionId = getOrCreateSessionId()
-  
-  let session = sessions.find(s => s.id === currentSessionId)
-  if (!session) {
-    session = { 
-      id: currentSessionId, 
-      createdAt: new Date().toISOString(),
-      results: [] 
-    }
-    sessions.push(session)
-  }
+  const sessionsRef = collection(db, 'sessions');
+  const q = query(sessionsRef, where('id', '==', sessionId));
+  const querySnapshot = await getDocs(q);
 
   const result: TaskResult = {
     taskId,
     type,
-    ...(type === 'polygon' ? { polygon: data as L.LatLngExpression[] } : { popups: data as Array<{ position: L.LatLngExpression, content: string }> })
-  }
+    ...(type === 'polygon' 
+      ? { polygons: polygonsToString(data as L.LatLngExpression[][]) } 
+      : { popups: popupsToString(data as Array<{ position: L.LatLngExpression, content: string }>) })
+  };
 
-  const existingResultIndex = session.results.findIndex(r => r.taskId === taskId)
-  if (existingResultIndex !== -1) {
-    session.results[existingResultIndex] = result
+  if (querySnapshot.empty) {
+    // Create new session
+    await addDoc(sessionsRef, {
+      id: sessionId,
+      createdAt: new Date().toISOString(),
+      results: [result]
+    });
   } else {
-    session.results.push(result)
-  }
+    // Update existing session
+    const sessionDoc = querySnapshot.docs[0];
+    const currentResults = sessionDoc.data().results || [];
+    const updatedResults = currentResults.filter((r: TaskResult) => r.taskId !== taskId);
+    updatedResults.push(result);
 
-  localStorage.setItem('sessions', JSON.stringify(sessions))
-  localStorage.setItem('currentSessionId', currentSessionId)
-}
-
-export function getTaskResults(taskId: number): TaskResult | null {
-  const sessions = getAllSessions()
-  const currentSessionId = localStorage.getItem('currentSessionId')
-  const session = sessions.find(s => s.id === currentSessionId)
-  return session?.results.find(r => r.taskId === taskId) || null
-}
-
-export function getAllSessions(): Session[] {
-  try {
-    const sessions = localStorage.getItem('sessions')
-    if (!sessions) return []
-    const parsed = JSON.parse(sessions)
-    return parsed.map((session: Session) => ({
-      ...session,
-      createdAt: session.createdAt || new Date().toISOString()
-    }))
-  } catch (error) {
-    console.error('Error parsing sessions:', error)
-    return []
+    await updateDoc(sessionDoc.ref, { results: updatedResults });
   }
 }
 
-export function deleteSession(sessionId: string) {
-  let sessions = getAllSessions()
-  sessions = sessions.filter(s => s.id !== sessionId)
-  localStorage.setItem('sessions', JSON.stringify(sessions))
+export async function getTaskResults(sessionId: string, taskId: number): Promise<TaskResult | null> {
+  const sessionsRef = collection(db, 'sessions');
+  const q = query(sessionsRef, where('id', '==', sessionId));
+  const querySnapshot = await getDocs(q);
+
+  if (!querySnapshot.empty) {
+    const sessionDoc = querySnapshot.docs[0];
+    const results = sessionDoc.data().results || [];
+    const result = results.find((r: TaskResult) => r.taskId === taskId);
+    if (result) {
+      if (result.type === 'polygon' && typeof result.polygons === 'string') {
+        result.polygons = stringToPolygons(result.polygons);
+      } else if (result.type === 'popup' && typeof result.popups === 'string') {
+        result.popups = stringToPopups(result.popups);
+      }
+    }
+    return result || null;
+  }
+
+  return null;
+}
+
+export async function getAllSessions(): Promise<Session[]> {
+  const sessionsRef = collection(db, 'sessions');
+  const querySnapshot = await getDocs(sessionsRef);
+  return querySnapshot.docs.map(doc => {
+    const data = doc.data() as Session;
+    data.results = data.results.map(result => {
+      if (result.type === 'polygon' && typeof result.polygons === 'string') {
+        return {
+          ...result,
+          polygons: stringToPolygons(result.polygons)
+        };
+      } else if (result.type === 'popup' && typeof result.popups === 'string') {
+        return {
+          ...result,
+          popups: stringToPopups(result.popups)
+        };
+      }
+      return result;
+    });
+    return {
+      ...data,
+      createdAt: data.createdAt || new Date().toISOString()
+    };
+  });
+}
+
+export async function deleteSession(sessionId: string) {
+  const sessionsRef = collection(db, 'sessions');
+  const q = query(sessionsRef, where('id', '==', sessionId));
+  const querySnapshot = await getDocs(q);
+
+  if (!querySnapshot.empty) {
+    const sessionDoc = querySnapshot.docs[0];
+    await deleteDoc(sessionDoc.ref);
+  }
 }

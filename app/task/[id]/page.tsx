@@ -5,37 +5,46 @@ import { Card, CardContent } from '@/components/ui/card'
 import LeafletMap from '@/components/LeafletMap'
 import { tasks } from '@/lib/tasks'
 import { saveTaskResult, getTaskResults } from '@/lib/storage'
+import { getOrCreateSessionId } from '@/lib/sessionUtils'
 
 export default function TaskPage({ params }: { params: { id: string } }) {
   const taskId = parseInt(params.id)
   const task = tasks[taskId - 1]
 
-  const [drawnPolygon, setDrawnPolygon] = useState<L.LatLngExpression[] | null>(null)
+  const [drawnPolygons, setDrawnPolygons] = useState<L.LatLngExpression[][] | null>(null)
   const [placedPopups, setPlacedPopups] = useState<Array<{ position: L.LatLngExpression, content: string }>>([])
+  const [sessionId, setSessionId] = useState<string | null>(null)
 
   useEffect(() => {
-    const existingResult = getTaskResults(taskId)
-    if (existingResult) {
-      if (existingResult.type === 'polygon' && existingResult.polygon) {
-        setDrawnPolygon(existingResult.polygon)
-      } else if (existingResult.type === 'popup' && existingResult.popups) {
-        setPlacedPopups(existingResult.popups)
+    const initSession = async () => {
+      const sid = await getOrCreateSessionId()
+      setSessionId(sid)
+      if (sid) {
+        const existingResult = await getTaskResults(sid, taskId)
+        if (existingResult) {
+          if (existingResult.type === 'polygon' && existingResult.polygons) {
+            setDrawnPolygons(existingResult.polygons)
+          } else if (existingResult.type === 'popup' && existingResult.popups) {
+            setPlacedPopups(existingResult.popups)
+          }
+        }
       }
     }
+    initSession()
   }, [taskId])
 
-  if (!task) {
+  if (!task || !sessionId) {
     return null
   }
 
-  const handlePolygonDrawn = (polygon: L.LatLngExpression[]) => {
-    setDrawnPolygon(polygon)
-    saveTaskResult(taskId, polygon, 'polygon')
+  const handlePolygonsDrawn = async (polygons: L.LatLngExpression[][]) => {
+    setDrawnPolygons(polygons)
+    await saveTaskResult(sessionId, taskId, polygons, 'polygon')
   }
 
-  const handlePopupsPlaced = (popups: Array<{ position: L.LatLngExpression, content: string }>) => {
+  const handlePopupsPlaced = async (popups: Array<{ position: L.LatLngExpression, content: string }>) => {
     setPlacedPopups(popups)
-    saveTaskResult(taskId, popups, 'popup')
+    await saveTaskResult(sessionId, taskId, popups, 'popup')
   }
 
   return (
@@ -53,13 +62,13 @@ export default function TaskPage({ params }: { params: { id: string } }) {
         <Card className="w-full lg:w-2/3">
           <CardContent className="p-6">
             <LeafletMap 
-              onPolygonDrawn={handlePolygonDrawn}
+              onPolygonsDrawn={handlePolygonsDrawn}
               onPopupsPlaced={handlePopupsPlaced}
               taskId={taskId} 
               totalTasks={tasks.length}
               taskType={task.type}
               readOnly={false}
-              initialPolygon={drawnPolygon || undefined}
+              initialPolygons={drawnPolygons || undefined}
               initialPopups={placedPopups}
             />
           </CardContent>
