@@ -1,11 +1,18 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
 import { Card, CardContent } from '@/components/ui/card'
-import LeafletMap from '@/components/LeafletMap'
+import ErrorBoundary from '@/components/ErrorBoundary'
 import { tasks } from '@/lib/tasks'
 import { saveTaskResult, getTaskResults } from '@/lib/storage'
 import { getOrCreateSessionId } from '@/lib/sessionUtils'
+import L from 'leaflet'
+
+const DynamicLeafletMap = dynamic(() => import('@/components/LeafletMap'), {
+  ssr: false,
+  loading: () => <p>Loading map...</p>
+})
 
 export default function TaskPage({ params }: { params: { id: string } }) {
   const taskId = parseInt(params.id)
@@ -23,9 +30,21 @@ export default function TaskPage({ params }: { params: { id: string } }) {
         const existingResult = await getTaskResults(sid, taskId)
         if (existingResult) {
           if (existingResult.type === 'polygon' && existingResult.polygons) {
-            setDrawnPolygons(existingResult.polygons)
+            try {
+              const parsedPolygons = JSON.parse(existingResult.polygons)
+              setDrawnPolygons(parsedPolygons)
+            } catch (error) {
+              console.error('Error parsing polygons:', error)
+              setDrawnPolygons(null)
+            }
           } else if (existingResult.type === 'popup' && existingResult.popups) {
-            setPlacedPopups(existingResult.popups)
+            try {
+              const parsedPopups = JSON.parse(existingResult.popups)
+              setPlacedPopups(parsedPopups)
+            } catch (error) {
+              console.error('Error parsing popups:', error)
+              setPlacedPopups([])
+            }
           }
         }
       }
@@ -61,16 +80,18 @@ export default function TaskPage({ params }: { params: { id: string } }) {
         </Card>
         <Card className="w-full lg:w-2/3">
           <CardContent className="p-6">
-            <LeafletMap 
-              onPolygonsDrawn={handlePolygonsDrawn}
-              onPopupsPlaced={handlePopupsPlaced}
-              taskId={taskId} 
-              totalTasks={tasks.length}
-              taskType={task.type}
-              readOnly={false}
-              initialPolygons={drawnPolygons || undefined}
-              initialPopups={placedPopups}
-            />
+            <ErrorBoundary fallback={<div>Failed to load map. Please try again later.</div>}>
+              <DynamicLeafletMap 
+                onPolygonsDrawn={handlePolygonsDrawn}
+                onPopupsPlaced={handlePopupsPlaced}
+                taskId={taskId} 
+                totalTasks={tasks.length}
+                taskType={task.type}
+                readOnly={false}
+                initialPolygons={drawnPolygons || undefined}
+                initialPopups={placedPopups}
+              />
+            </ErrorBoundary>
           </CardContent>
         </Card>
       </div>

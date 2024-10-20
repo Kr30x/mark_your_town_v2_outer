@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react'
+import dynamic from 'next/dynamic'
 import { MapContainer, TileLayer, FeatureGroup, Polygon, Popup, useMap, useMapEvents, Marker } from 'react-leaflet'
 import { EditControl } from 'react-leaflet-draw'
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import 'leaflet-draw'
-import L, { polygon } from 'leaflet'
+import L from 'leaflet'
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from 'next/navigation'
-import { saveTaskResult } from '@/lib/storage'
+import ErrorBoundary from '@/components/ErrorBoundary'
 
 delete (L.Icon.Default.prototype as any)._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -27,6 +28,11 @@ interface LeafletMapProps {
   initialPopups?: Array<{ position: L.LatLngExpression, content: string }>
   taskType: 'polygon' | 'popup'
 }
+
+const DynamicMapContainer = dynamic(() => import('react-leaflet').then(mod => mod.MapContainer), {
+  ssr: false,
+  loading: () => <p>Loading map...</p>
+})
 
 function MapUpdater({ readOnly, initialPolygons, initialPopups }: { readOnly?: boolean, initialPolygons?: L.LatLngExpression[][], initialPopups?: Array<{ position: L.LatLngExpression, content: string }> }) {
   const map = useMap()
@@ -78,12 +84,19 @@ export default function LeafletMap({ onPolygonsDrawn, onPopupsPlaced, taskId, to
 
   const handleCreated = async (e: L.LeafletEvent): Promise<void> => {
     if (e.type === 'draw:created' && 'layer' in e) {
-      const layer = e.layer as L.Layer
+      const layer = e.layer as L.Polygon
       if (drawnItems) {
         drawnItems.addLayer(layer)
-        const polygons = drawnItems.getLayers()
+        const polygons: L.LatLngExpression[][] = drawnItems.getLayers()
           .filter(layer => layer instanceof L.Polygon)
-          .map((layer) => (layer as L.Polygon).getLatLngs()[0].map((latLng: L.LatLng) => [latLng.lat, latLng.lng]))
+          .map((layer) => {
+            const latLngs = (layer as L.Polygon).getLatLngs()
+            if (Array.isArray(latLngs[0])) {
+              return (latLngs[0] as L.LatLng[]).map(latLng => [latLng.lat, latLng.lng] as L.LatLngTuple)
+            } else {
+              return (latLngs as L.LatLng[]).map(latLng => [latLng.lat, latLng.lng] as L.LatLngTuple)
+            }
+          })
         await onPolygonsDrawn?.(polygons)
       }
     }
@@ -115,20 +128,21 @@ export default function LeafletMap({ onPolygonsDrawn, onPopupsPlaced, taskId, to
       return
     }
 
-    let result
-    if (taskType === 'polygon') {
-      result = drawnItems!.getLayers()
-        .filter(layer => layer instanceof L.Polygon)
-        .map((layer) => (layer as L.Polygon).getLatLngs()[0].map((latLng: L.LatLng) => [latLng.lat, latLng.lng]))
-    } else {
-      result = popups
-    }
-
     try {
       if (taskType === 'polygon') {
-        await onPolygonsDrawn?.(result)
+        const polygonResult = drawnItems!.getLayers()
+          .filter(layer => layer instanceof L.Polygon)
+          .map((layer) => {
+            const latLngs = (layer as L.Polygon).getLatLngs()
+            if (Array.isArray(latLngs[0])) {
+              return (latLngs[0] as L.LatLng[]).map(latLng => [latLng.lat, latLng.lng] as L.LatLngTuple)
+            } else {
+              return (latLngs as L.LatLng[]).map(latLng => [latLng.lat, latLng.lng] as L.LatLngTuple)
+            }
+          })
+        await onPolygonsDrawn?.(polygonResult)
       } else {
-        await onPopupsPlaced?.(result)
+        await onPopupsPlaced?.(popups)
       }
 
       toast({
@@ -159,44 +173,46 @@ export default function LeafletMap({ onPolygonsDrawn, onPopupsPlaced, taskId, to
     <div className="flex flex-col items-center justify-center w-full space-y-4">
       <div className="w-full h-[500px] bg-white rounded-lg shadow-lg overflow-hidden">
         {drawnItems && (
-          <MapContainer
-            center={[55.8214, 37.3388]} // Krasnogorsk coordinates
-            zoom={13}
-            style={{ height: '100%', width: '100%' }}
-          >
-            <TileLayer
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            />
-            <FeatureGroup ref={setDrawnItems}>
-              {do_print() && !readOnly && taskType === 'polygon' && (
-                <EditControl
-                  position="topright"
-                  onCreated={handleCreated}
-                  draw={{
-                    rectangle: false,
-                    circle: false,
-                    circlemarker: false,
-                    marker: false,
-                    polygon: true,
-                    polyline: false,
-                  }}
-                />
-              )}
-              {readOnly && initialPolygons && initialPolygons.map((polygon, index) => (
-                <Polygon key={index} positions={polygon} />
+          <ErrorBoundary fallback={<div>Failed to load map. Please try again later.</div>}>
+            <DynamicMapContainer
+              center={[55.8214, 37.3388]} // Krasnogorsk coordinates
+              zoom={13}
+              style={{ height: '100%', width: '100%' }}
+            >
+              <TileLayer
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              />
+              <FeatureGroup ref={setDrawnItems}>
+                {do_print() && !readOnly && taskType === 'polygon' && (
+                  <EditControl
+                    position="topright"
+                    onCreated={handleCreated}
+                    draw={{
+                      rectangle: false,
+                      circle: false,
+                      circlemarker: false,
+                      marker: false,
+                      polygon: true,
+                      polyline: false,
+                    }}
+                  />
+                )}
+                {readOnly && initialPolygons && initialPolygons.map((polygon, index) => (
+                  <Polygon key={index} positions={polygon} />
+                ))}
+              </FeatureGroup>
+              <PopupPlacer onPopupPlaced={handlePopupPlaced} isPlacingPopup={isPlacingPopup} />
+              {popups.map((popup, index) => (
+                <Marker key={index} position={popup.position}>
+                  <Popup>
+                    {popup.content}
+                  </Popup>
+                </Marker>
               ))}
-            </FeatureGroup>
-            <PopupPlacer onPopupPlaced={handlePopupPlaced} isPlacingPopup={isPlacingPopup} />
-            {popups.map((popup, index) => (
-              <Marker key={index} position={popup.position}>
-                <Popup>
-                  {popup.content}
-                </Popup>
-              </Marker>
-            ))}
-            <MapUpdater readOnly={readOnly} initialPolygons={initialPolygons} initialPopups={initialPopups} />
-          </MapContainer>
+              <MapUpdater readOnly={readOnly} initialPolygons={initialPolygons} initialPopups={initialPopups} />
+            </DynamicMapContainer>
+          </ErrorBoundary>
         )}
       </div>
       {!readOnly && (

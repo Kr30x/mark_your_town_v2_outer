@@ -5,7 +5,7 @@ import L from 'leaflet'
 export interface TaskResult {
   taskId: number
   polygons?: string // For polygon type
-  popups?: string // Changed to string for popup type
+  popups?: string // For popup type
   type: 'polygon' | 'popup'
 }
 
@@ -28,9 +28,20 @@ function stringToPolygons(str: string): L.LatLngExpression[][] {
 // Helper function to convert popups to string
 function popupsToString(popups: Array<{ position: L.LatLngExpression, content: string }>): string {
   return JSON.stringify(popups.map(popup => ({
-    position: [popup.position.lat, popup.position.lng],
+    position: getLatLngArray(popup.position),
     content: popup.content
   })));
+}
+
+// Helper function to convert LatLngExpression to [number, number]
+function getLatLngArray(position: L.LatLngExpression): [number, number] {
+  if (Array.isArray(position)) {
+    return [position[0], position[1]];
+  } else if (typeof position === 'object' && 'lat' in position && 'lng' in position) {
+    return [position.lat, position.lng];
+  } else {
+    throw new Error('Invalid LatLngExpression');
+  }
 }
 
 // Helper function to convert string back to popups
@@ -100,29 +111,20 @@ export async function getTaskResults(sessionId: string, taskId: number): Promise
 }
 
 export async function getAllSessions(): Promise<Session[]> {
+  console.log('Fetching all sessions...')
   const sessionsRef = collection(db, 'sessions');
   const querySnapshot = await getDocs(sessionsRef);
-  return querySnapshot.docs.map(doc => {
+  console.log('Query snapshot:', querySnapshot)
+  const sessions = querySnapshot.docs.map(doc => {
     const data = doc.data() as Session;
-    data.results = data.results.map(result => {
-      if (result.type === 'polygon' && typeof result.polygons === 'string') {
-        return {
-          ...result,
-          polygons: stringToPolygons(result.polygons)
-        };
-      } else if (result.type === 'popup' && typeof result.popups === 'string') {
-        return {
-          ...result,
-          popups: stringToPopups(result.popups)
-        };
-      }
-      return result;
-    });
+    console.log('Session data:', data)
     return {
       ...data,
       createdAt: data.createdAt || new Date().toISOString()
     };
   });
+  console.log('Processed sessions:', sessions)
+  return sessions;
 }
 
 export async function deleteSession(sessionId: string) {
